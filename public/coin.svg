@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Outer ring -->
+  <circle cx="24" cy="24" r="22" fill="url(#goldGrad)" stroke="#B8860B" stroke-width="2"/>
+  <!-- Inner ring -->
+  <circle cx="24" cy="24" r="18" fill="none" stroke="#FFF8DC" stroke-width="1.5" opacity="0.6"/>
+  <!-- Shine highlight -->
+  <ellipse cx="18" cy="16" rx="8" ry="6" fill="white" opacity="0.15"/>
+  <!-- R letter -->
+  <text x="24" y="31" text-anchor="middle" font-family="Georgia, serif" font-weight="bold" font-size="24" fill="#7C4A00">R</text>
+  <!-- Inner shadow for depth -->
+  <circle cx="24" cy="24" r="18" fill="none" stroke="#DAA520" stroke-width="0.5" opacity="0.4"/>
+  <defs>
+    <linearGradient id="goldGrad" x1="4" y1="4" x2="44" y2="44">
+      <stop offset="0%" stop-color="#FFE066"/>
+      <stop offset="30%" stop-color="#FFD700"/>
+      <stop offset="60%" stop-color="#FFC107"/>
+      <stop offset="100%" stop-color="#DAA520"/>
+    </linearGradient>
+  </defs>
+</svg>
