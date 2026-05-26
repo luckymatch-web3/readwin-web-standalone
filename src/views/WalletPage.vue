@@ -11,6 +11,7 @@ import { coinApi, diamondApi, withdrawApi } from '@/services/api'
 import { Analytics } from '@/services/analytics'
 import { isNativeApp } from '@/services/admob'
 import type { WithdrawRecord } from '@/types'
+import { API_BASE_URL } from '@/config'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -176,8 +177,7 @@ async function exchangeDiamondToCoin() {
 
   try {
     const token = JSON.parse(localStorage.getItem('user-store') || '{}').token
-    const baseUrl = import.meta.env.VITE_API_BASE_URL ? `${import.meta.env.VITE_API_BASE_URL}/api` : '/api'
-    const response = await fetch(`${baseUrl}/diamonds/exchange`, {
+    const response = await fetch(`${API_BASE_URL}/diamonds/exchange`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

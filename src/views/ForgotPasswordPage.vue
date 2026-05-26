@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToastStore } from '@/stores/toast'
+import { API_BASE_URL } from '@/config'
 
 const router = useRouter()
 const toastStore = useToastStore()
@@ -15,7 +16,7 @@ const error = ref('')
 const countdown = ref(0)
 let timer: any = null
 
-const BASE = import.meta.env.VITE_API_BASE_URL ? `${import.meta.env.VITE_API_BASE_URL}/api` : '/api'
+const BASE = API_BASE_URL
 
 function startCountdown() {
   countdown.value = 60

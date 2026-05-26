@@ -1,9 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { API_BASE_URL } from '@/config'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL
-  ? `${import.meta.env.VITE_API_BASE_URL}/api`
-  : '/api'
+const BASE_URL = API_BASE_URL
 
 function getToken(): string | null {
   try {

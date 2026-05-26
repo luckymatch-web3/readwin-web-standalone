@@ -1,10 +1,7 @@
-const BASE = 'https://readwin.me'
+import { ASSET_BASE_URL } from '@/config'
 
 export function coverUrl(url: string | null | undefined): string {
-  if (!url) return BASE + '/default-cover.svg'
+  if (!url) return `${ASSET_BASE_URL}/default-cover.svg`
   if (url.startsWith('http')) return url
-  // Capacitor app runs on https://localhost, needs full server URL for covers
-  const isApp = typeof window !== 'undefined' && 
-    (window.location.hostname === 'localhost' || window.location.protocol === 'capacitor:')
-  return isApp ? BASE + url : url
+  return `${ASSET_BASE_URL}${url.startsWith('/') ? url : `/${url}`}`
 }

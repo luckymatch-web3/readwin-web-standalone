@@ -7,7 +7,7 @@ This is the browser-only ReadWin frontend extracted from the original full-stack
 - Vue 3 + Vite + TypeScript web app
 - Pinia stores, router, pages, reusable components, and mock fallback data
 - Public logo/icon assets needed by the browser build
-- API base URL configuration through `VITE_API_BASE_URL`
+- API and image asset domain configuration through `VITE_API_BASE_URL` and `VITE_ASSET_BASE_URL`
 
 ## What is not included
 
@@ -23,9 +23,10 @@ Copy `.env.example` to `.env` and change the domain:
 
 ```bash
 VITE_API_BASE_URL=https://readwin.me
+VITE_ASSET_BASE_URL=https://readwin.me
 ```
 
-When `VITE_API_BASE_URL` is not set, the app calls `/api` on the same domain. In local dev, Vite proxies `/api` to `https://readwin.me` by default.
+When these values are not set, the standalone web build defaults both API calls and relative cover images to `https://readwin.me`. In local dev, Vite also proxies `/api` to `https://readwin.me` by default.
 
 ## Development
 
