@@ -1,958 +1,849 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
 import { useBookshelfStore } from '@/stores/bookshelf'
-import { showIAP } from '@/composables/useIAP'
+import { useUserStore } from '@/stores/user'
 import { coverUrl } from '@/utils/cover'
 import { capitalize } from '@/utils/text'
+import { APP_DOWNLOAD_URL } from '@/config'
 import type { Novel } from '@/types'
-import BannerCarousel from '@/components/BannerCarousel.vue'
-import NovelCard from '@/components/NovelCard.vue'
-import AdMultiplex from '@/components/AdMultiplex.vue'
-import AdSidebar from '@/components/AdSidebar.vue'
-import CoinIcon from '@/components/CoinIcon.vue'
-import NativeHomeScreen from '@/components/app/NativeHomeScreen.vue'
-import { isNativeApp } from '@/services/admob'
 
-const store = useNovelStore()
+const router = useRouter()
+const novelStore = useNovelStore()
 const bookshelfStore = useBookshelfStore()
-const nativeApp = isNativeApp()
+const userStore = useUserStore()
+const activeCategory = ref('all')
 
-onMounted(() => store.init())
+onMounted(async () => {
+  await novelStore.init()
+})
 
 type ContinueNovel = Novel & { lastChapter: number; progress: number }
 
-const continueReading = computed<ContinueNovel[]>(() => {
-  const history = bookshelfStore.readHistory || []
-  const seen = new Set<number>()
-  const items: ContinueNovel[] = []
+const heroStory = computed(() =>
+  novelStore.featuredNovels[0] || novelStore.hotNovels[0] || novelStore.novels[0] || null,
+)
 
-  for (const entry of history) {
-    const novelId = entry.novel?.id
-    if (!novelId || seen.has(novelId)) continue
-    seen.add(novelId)
-    const novel = store.getNovelById(novelId)
-    if (!novel) continue
-    const chapter = safeChapter(entry.chapter_no, novel.total_chapters)
-    const progress = novel.total_chapters > 0 ? Math.round((chapter / novel.total_chapters) * 100) : 0
-    items.push({ ...novel, lastChapter: chapter, progress })
-    if (items.length >= 3) break
-  }
-
-  return items
-})
-
-const heroNovel = computed(() => store.featuredNovels[0] || store.hotNovels[0] || store.novels[0] || null)
-
-const spotlightNovel = computed(() =>
-  store.featuredNovels.find(n => n.id !== heroNovel.value?.id) ||
-  store.hotNovels.find(n => n.id !== heroNovel.value?.id) ||
-  store.novels.find(n => n.id !== heroNovel.value?.id) ||
+const secondaryStory = computed(() =>
+  novelStore.hotNovels.find(item => item.id !== heroStory.value?.id) ||
+  novelStore.featuredNovels.find(item => item.id !== heroStory.value?.id) ||
+  novelStore.novels.find(item => item.id !== heroStory.value?.id) ||
   null,
 )
 
-const trendingNovels = computed(() => store.hotNovels.slice(0, 9))
-const trendingLead = computed(() => trendingNovels.value.slice(0, 3))
-const trendingList = computed(() => trendingNovels.value.slice(3, 9))
-
-const editorialPicks = computed(() =>
-  store.featuredNovels
-    .filter(n => n.id !== heroNovel.value?.id && n.id !== spotlightNovel.value?.id)
-    .slice(0, 6),
-)
-
-const completedNovels = computed(() =>
-  store.novels
-    .filter(n => n.status === 2)
-    .sort((a, b) => b.rating_avg - a.rating_avg)
-    .slice(0, 10),
-)
-
-const freshNovels = computed(() => {
-  const source = store.newNovels.length ? store.newNovels : store.novels
-  return source.slice(0, 18)
+const continueReading = computed<ContinueNovel[]>(() => {
+  const seen = new Set<number>()
+  return (bookshelfStore.readHistory || [])
+    .filter(item => {
+      const novelId = item.novel?.id
+      if (!novelId || seen.has(novelId)) return false
+      seen.add(novelId)
+      return true
+    })
+    .slice(0, 3)
+    .map(item => {
+      const novel = novelStore.getNovelById(item.novel.id) || item.novel
+      const chapter = safeChapter(item.chapter_no, novel.total_chapters)
+      const progress = novel.total_chapters > 0 ? Math.round((chapter / novel.total_chapters) * 100) : 0
+      return { ...novel, lastChapter: chapter, progress } as ContinueNovel
+    })
 })
 
-const categoryHighlights = computed(() =>
-  store.categories
+const categoryTabs = computed(() => {
+  const categories = novelStore.categories
     .map(category => ({
-      ...category,
-      count: store.novels.filter(n => n.category?.id === category.id).length,
+      key: String(category.name || category.display_name).toLowerCase(),
+      label: category.display_name || capitalize(category.name),
+      count: novelStore.novels.filter(novel => novel.category?.id === category.id).length,
     }))
+    .filter(category => category.key && category.count > 0)
     .sort((a, b) => b.count - a.count)
-    .slice(0, 6),
-)
+    .slice(0, 7)
 
-function formatCount(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
-  return String(n)
-}
+  return [{ key: 'all', label: 'Popular', count: novelStore.novels.length }, ...categories]
+})
 
-function formatWords(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M words`
-  if (n >= 1000) return `${(n / 1000).toFixed(0)}K words`
-  return `${n} words`
-}
+const activeStories = computed(() => {
+  if (activeCategory.value === 'all') {
+    const source = novelStore.hotNovels.length ? novelStore.hotNovels : novelStore.novels
+    return source.slice(0, 10)
+  }
+  return novelStore.getNovelsByCategory(activeCategory.value).slice(0, 10)
+})
+
+const featuredRail = computed(() => {
+  const seen = new Set<number>()
+  return [...novelStore.featuredNovels, ...novelStore.hotNovels, ...novelStore.novels]
+    .filter(story => {
+      if (seen.has(story.id)) return false
+      seen.add(story.id)
+      return true
+    })
+    .slice(0, 6)
+})
+
+const rewardTasks = computed(() => [
+  {
+    title: 'Read chapters',
+    value: '+200',
+    note: 'Timed coins appear inside the reader while chapters stay free.',
+    action: () => startReading(heroStory.value),
+  },
+  {
+    title: 'Daily check-in',
+    value: '+1,000',
+    note: 'Claim a web streak and keep your wallet moving.',
+    action: () => router.push('/reward'),
+  },
+  {
+    title: 'Reward center',
+    value: 'Tasks',
+    note: 'Open chest, sprint, and app video lanes from one place.',
+    action: () => router.push('/reward'),
+  },
+  {
+    title: 'Cashout',
+    value: 'App',
+    note: 'PayPal payout opens from the Android app.',
+    action: () => router.push('/withdraw'),
+  },
+])
+
+const coinBalance = computed(() => Number(userStore.displayCoinBalance || 0))
+const estimatedCash = computed(() => Math.max(0, coinBalance.value / 10000))
+
+const appStats = computed(() => [
+  { label: 'Downloads', value: '1K+' },
+  { label: 'Genres', value: '12' },
+  { label: 'Rating', value: '3+' },
+])
 
 function safeChapter(chapterNo: number, total = 0) {
   const fallbackTotal = Math.max(1, Number(total || 1))
   const next = Number.isFinite(chapterNo) ? Math.floor(chapterNo) : 1
   return Math.min(Math.max(next, 1), fallbackTotal)
 }
+
+function formatNumber(value: number) {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`
+  if (value >= 1000) return `${Math.floor(value / 1000)}K`
+  return String(value || 0)
+}
+
+function startReading(story?: Novel | null, chapter = 1) {
+  const target = story || heroStory.value || novelStore.novels[0]
+  if (!target) {
+    router.push('/explore')
+    return
+  }
+  bookshelfStore.addToBookshelf(target)
+  router.push(`/book/${target.id}/chapter/${safeChapter(chapter, target.total_chapters)}`)
+}
+
+function openStory(story: Novel) {
+  bookshelfStore.addToBookshelf(story)
+  router.push(`/book/${story.id}`)
+}
 </script>
 
 <template>
-  <NativeHomeScreen v-if="nativeApp" />
-  <div v-else class="flex justify-center gap-6">
-    <AdSidebar side="left" />
+  <main class="web-app-home">
+    <section class="home-hero">
+      <div class="home-hero-copy">
+        <p class="home-eyebrow">ReadWin web app</p>
+        <h1>Read free novels. Earn coins as you go.</h1>
+        <p class="home-lede">
+          The web experience now follows the Android app flow: open free chapters, build a coin balance, then move to the app when it is time to cash out.
+        </p>
 
-    <main class="home-page pb-20 flex-1 min-w-0">
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 pt-4 md:pt-6">
-        <div class="hero-shell">
-          <div class="hero-grid">
-            <div class="hero-copy">
-              <p class="hero-kicker">Curated for your next binge</p>
-              <h1 class="hero-title">
-                {{ heroNovel ? capitalize(heroNovel.title) : 'Find your next can’t-put-down story.' }}
-              </h1>
-              <p class="hero-summary">
-                {{
-                  heroNovel
-                    ? heroNovel.synopsis
-                    : 'ReadWin brings together trending web novels, immersive serialized fiction, and reward-driven reading in one polished reading space.'
-                }}
-              </p>
-
-              <div v-if="heroNovel" class="hero-meta">
-                <span>{{ capitalize(heroNovel.author_name) }}</span>
-                <span>{{ formatCount(heroNovel.view_count) }} readers</span>
-                <span>{{ heroNovel.total_chapters }} chapters</span>
-                <span>{{ formatWords(heroNovel.word_count) }}</span>
-              </div>
-
-              <div class="hero-actions">
-                <router-link
-                  :to="heroNovel ? `/book/${heroNovel.id}` : '/explore'"
-                  class="hero-primary-cta"
-                >
-                  Start Reading
-                </router-link>
-                <router-link
-                  :to="continueReading.length ? `/book/${continueReading[0]!.id}/chapter/${continueReading[0]!.lastChapter}` : '/explore'"
-                  class="hero-secondary-cta"
-                >
-                  {{ continueReading.length ? 'Resume Your Latest Story' : 'Browse the Library' }}
-                </router-link>
-              </div>
-
-              <div v-if="categoryHighlights.length" class="hero-categories">
-                <router-link
-                  v-for="category in categoryHighlights"
-                  :key="category.id"
-                  :to="`/category/${category.name}`"
-                  class="category-pill"
-                >
-                  <span>{{ category.display_name }}</span>
-                  <span>{{ category.count }}</span>
-                </router-link>
-              </div>
-            </div>
-
-            <div v-if="heroNovel" class="hero-visual">
-              <div class="hero-cover-wrap">
-                <div
-                  class="hero-cover-glow"
-                  :style="{ backgroundImage: `url(${coverUrl(heroNovel.cover_url)})` }"
-                ></div>
-                <img
-                  :src="coverUrl(heroNovel.cover_url)"
-                  :alt="heroNovel.title"
-                  class="hero-cover"
-                />
-                <div class="hero-badge-card">
-                  <p class="hero-badge-label">Featured Today</p>
-                  <p class="hero-badge-title">{{ capitalize(heroNovel.category?.display_name || heroNovel.category?.name || 'Story') }}</p>
-                  <p class="hero-badge-note">Top rated and ready to hook mobile readers fast.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="hero-carousel">
-            <BannerCarousel :banners="store.banners" />
-          </div>
+        <div class="home-hero-actions">
+          <button class="home-primary" type="button" @click="startReading(heroStory)">
+            Start reading
+          </button>
+          <button class="home-secondary" type="button" @click="router.push('/reward')">
+            Earn coins
+          </button>
+          <a class="home-secondary home-download" :href="APP_DOWNLOAD_URL" target="_blank" rel="noopener">
+            Download app
+          </a>
         </div>
-      </section>
 
-      <section v-if="continueReading.length" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-8">
-        <div class="section-intro">
+        <div class="home-balance-strip">
           <div>
-            <p class="section-kicker">Pick up where you left off</p>
-            <h2 class="section-title">Continue Reading</h2>
+            <span>My coins</span>
+            <strong>{{ coinBalance.toLocaleString() }}</strong>
           </div>
-        </div>
-
-        <div class="grid gap-4 md:grid-cols-3">
-          <router-link
-            v-for="book in continueReading"
-            :key="book.id"
-            :to="`/book/${book.id}/chapter/${book.lastChapter}`"
-            class="continue-card"
-          >
-            <img :src="coverUrl(book.cover_url)" :alt="book.title" class="continue-cover" />
-            <div class="min-w-0 flex-1">
-              <p class="continue-title">{{ capitalize(book.title) }}</p>
-              <p class="continue-meta">Chapter {{ book.lastChapter }} of {{ book.total_chapters }}</p>
-              <div class="continue-progress-track">
-                <div class="continue-progress-fill" :style="{ width: `${book.progress}%` }"></div>
-              </div>
-              <div class="continue-footer">
-                <span>{{ book.progress }}% complete</span>
-                <span>Resume</span>
-              </div>
-            </div>
-          </router-link>
-        </div>
-      </section>
-
-      <section v-if="spotlightNovel" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-8">
-        <div class="spotlight-shell">
-          <div class="spotlight-copy">
-            <p class="section-kicker">Editorial spotlight</p>
-            <h2 class="spotlight-title">{{ capitalize(spotlightNovel.title) }}</h2>
-            <p class="spotlight-summary">{{ spotlightNovel.synopsis }}</p>
-
-            <div class="spotlight-stats">
-              <span>{{ formatCount(spotlightNovel.view_count) }} reads</span>
-              <span>{{ Number(spotlightNovel.rating_avg || 0).toFixed(1) }} rating</span>
-              <span>{{ spotlightNovel.total_chapters }} chapters</span>
-            </div>
-
-            <div class="hero-actions">
-              <router-link :to="`/book/${spotlightNovel.id}`" class="hero-primary-cta">
-                View Story
-              </router-link>
-              <router-link :to="`/category/${spotlightNovel.category.name}`" class="hero-secondary-cta">
-                Explore {{ spotlightNovel.category.display_name }}
-              </router-link>
-            </div>
-          </div>
-
-          <div class="spotlight-art">
-            <img
-              :src="coverUrl(spotlightNovel.cover_url)"
-              :alt="spotlightNovel.title"
-              class="spotlight-cover"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section v-if="trendingLead.length" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="section-intro">
           <div>
-            <p class="section-kicker">What readers are racing through</p>
-            <h2 class="section-title">Trending Now</h2>
+            <span>Cash preview</span>
+            <strong>${{ estimatedCash.toFixed(2) }}</strong>
           </div>
-          <router-link to="/rankings" class="section-link">See rankings</router-link>
-        </div>
-
-        <div class="trending-grid">
-          <router-link
-            v-for="(novel, index) in trendingLead"
-            :key="novel.id"
-            :to="`/book/${novel.id}`"
-            class="trending-card"
-          >
-            <div class="trending-rank">0{{ index + 1 }}</div>
-            <img :src="coverUrl(novel.cover_url)" :alt="novel.title" class="trending-cover" />
-            <div>
-              <p class="trending-title">{{ capitalize(novel.title) }}</p>
-              <p class="trending-subtitle">{{ capitalize(novel.author_name) }}</p>
-              <p class="trending-description line-clamp-3">{{ novel.synopsis }}</p>
-              <div class="trending-meta">
-                <span>{{ formatCount(novel.view_count) }} readers</span>
-                <span>{{ Number(novel.rating_avg || 0).toFixed(1) }} stars</span>
-              </div>
-            </div>
-          </router-link>
-        </div>
-
-        <div v-if="trendingList.length" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
-          <NovelCard
-            v-for="(novel, index) in trendingList"
-            :key="novel.id"
-            :novel="novel"
-            mode="horizontal"
-            :rank="index + 4"
-          />
-        </div>
-      </section>
-
-      <section v-if="editorialPicks.length" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="section-intro">
           <div>
-            <p class="section-kicker">Polished picks from the front shelf</p>
-            <h2 class="section-title">Editor&apos;s Picks</h2>
-          </div>
-          <router-link to="/explore" class="section-link">Browse all</router-link>
-        </div>
-
-        <div class="flex gap-4 overflow-x-auto pb-2 scrollbar-hide scroll-fade-right">
-          <div
-            v-for="novel in editorialPicks"
-            :key="novel.id"
-            class="w-[160px] lg:w-[180px] shrink-0"
-          >
-            <NovelCard :novel="novel" />
+            <span>Payout</span>
+            <strong>App only</strong>
           </div>
         </div>
-      </section>
+      </div>
 
-      <section v-if="completedNovels.length" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="section-intro">
+      <div class="home-phone" aria-label="ReadWin app style preview">
+        <header class="phone-topbar">
+          <div class="phone-brand">
+            <img src="/logo.png" alt="ReadWin" />
+            <strong>ReadWin</strong>
+          </div>
+          <button type="button" @click="router.push('/withdraw')">Cashout</button>
+        </header>
+
+        <button class="phone-search" type="button" @click="router.push('/search')">
+          Search free chapters
+        </button>
+
+        <article v-if="heroStory" class="phone-feature" @click="openStory(heroStory)">
+          <img :src="coverUrl(heroStory.cover_url)" :alt="heroStory.title" />
           <div>
-            <p class="section-kicker">For readers who want the full arc now</p>
-            <h2 class="section-title">Completed Stories</h2>
+            <span>{{ heroStory.category?.display_name || 'Featured' }}</span>
+            <strong>{{ capitalize(heroStory.title) }}</strong>
+            <small>{{ formatNumber(heroStory.view_count) }} readers</small>
           </div>
-          <router-link to="/explore?status=completed" class="section-link">View finished books</router-link>
+        </article>
+
+        <div class="phone-task-grid">
+          <button v-for="task in rewardTasks.slice(0, 4)" :key="task.title" type="button" @click="task.action">
+            <span>{{ task.title }}</span>
+            <strong>{{ task.value }}</strong>
+          </button>
         </div>
+      </div>
+    </section>
 
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          <router-link
-            v-for="novel in completedNovels"
-            :key="novel.id"
-            :to="`/book/${novel.id}`"
-            class="completed-card"
-          >
-            <div class="relative">
-              <img :src="coverUrl(novel.cover_url)" :alt="novel.title" class="completed-cover" />
-              <span class="completed-badge">Finished</span>
-            </div>
-            <p class="completed-title">{{ capitalize(novel.title) }}</p>
-            <p class="completed-meta">{{ Number(novel.rating_avg || 0).toFixed(1) }} rating</p>
-          </router-link>
+    <section class="home-band">
+      <div v-for="item in appStats" :key="item.label" class="home-stat">
+        <strong>{{ item.value }}</strong>
+        <span>{{ item.label }}</span>
+      </div>
+      <div class="home-band-copy">
+        <strong>Free English web novels across romance, werewolf, fantasy, mafia, mystery, sci-fi, and more.</strong>
+        <span>Updated from the same backend content used by the app.</span>
+      </div>
+    </section>
+
+    <section v-if="continueReading.length" class="home-section">
+      <div class="home-section-head">
+        <div>
+          <p class="home-eyebrow">Resume</p>
+          <h2>Continue reading</h2>
         </div>
-      </section>
+      </div>
 
-      <section v-if="showIAP" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="rewards-shell">
-          <div>
-            <p class="section-kicker rewards-kicker">Daily quest</p>
-            <h2 class="rewards-title">Your reading time is literally golden.</h2>
-            <p class="rewards-summary">
-              All chapters are free. Check in, invite friends, and watch rewarded videos to grow your cashout path.
-            </p>
-          </div>
+      <div class="continue-grid">
+        <button
+          v-for="book in continueReading"
+          :key="book.id"
+          class="continue-item"
+          type="button"
+          @click="startReading(book, book.lastChapter)"
+        >
+          <img :src="coverUrl(book.cover_url)" :alt="book.title" />
+          <span>{{ capitalize(book.title) }}</span>
+          <small>Chapter {{ book.lastChapter }} · {{ book.progress }}%</small>
+          <i><b :style="{ width: `${book.progress}%` }"></b></i>
+        </button>
+      </div>
+    </section>
 
-          <div class="rewards-grid">
-            <router-link to="/profile" class="reward-card">
-              <span class="reward-label">Check-in</span>
-              <strong>+10 to +100</strong>
-              <span>Stay consistent and stack coins daily.</span>
-            </router-link>
-            <router-link to="/invite" class="reward-card">
-              <span class="reward-label">Invite</span>
-              <strong>+200</strong>
-              <span>Bring in friends and turn readers into referrals.</span>
-            </router-link>
-            <router-link to="/earn" class="reward-card">
-              <span class="reward-label">Watch ads</span>
-              <strong>+10 each</strong>
-              <span>Short rewarded boosts built for quick sessions.</span>
-            </router-link>
-          </div>
-
-          <router-link to="/earn" class="rewards-cta">
-            <CoinIcon size="1.05em" />
-            Earn Coins Now
-          </router-link>
+    <section class="home-section home-reward-section">
+      <div class="home-section-head">
+        <div>
+          <p class="home-eyebrow">Coins and payout</p>
+          <h2>Web earns. App cashes out.</h2>
         </div>
-      </section>
+        <button class="home-section-action" type="button" @click="router.push('/reward')">Open rewards</button>
+      </div>
 
-      <section v-if="freshNovels.length" class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="section-intro">
-          <div>
-            <p class="section-kicker">Fresh arrivals</p>
-            <h2 class="section-title">New Releases</h2>
-          </div>
+      <div class="reward-grid">
+        <button v-for="task in rewardTasks" :key="task.title" class="reward-tile" type="button" @click="task.action">
+          <span>{{ task.title }}</span>
+          <strong>{{ task.value }}</strong>
+          <small>{{ task.note }}</small>
+        </button>
+      </div>
+    </section>
+
+    <section class="home-section">
+      <div class="home-section-head">
+        <div>
+          <p class="home-eyebrow">Library</p>
+          <h2>{{ activeCategory === 'all' ? 'Popular right now' : categoryTabs.find(item => item.key === activeCategory)?.label }}</h2>
         </div>
+        <button class="home-section-action" type="button" @click="router.push('/explore')">Explore all</button>
+      </div>
 
-        <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
-          <NovelCard v-for="novel in freshNovels" :key="novel.id" :novel="novel" />
+      <div class="category-row">
+        <button
+          v-for="category in categoryTabs"
+          :key="category.key"
+          type="button"
+          :class="{ active: activeCategory === category.key }"
+          @click="activeCategory = category.key"
+        >
+          <span>{{ category.label }}</span>
+          <small>{{ category.count }}</small>
+        </button>
+      </div>
+
+      <div class="story-grid">
+        <button v-for="story in activeStories" :key="story.id" class="story-card" type="button" @click="openStory(story)">
+          <img :src="coverUrl(story.cover_url)" :alt="story.title" />
+          <span>{{ capitalize(story.title) }}</span>
+          <small>{{ story.total_chapters }} chapters · {{ Number(story.rating_avg || 0).toFixed(1) }}</small>
+        </button>
+      </div>
+    </section>
+
+    <section class="home-section app-download-panel">
+      <div>
+        <p class="home-eyebrow">Android app</p>
+        <h2>Cashout, video rewards, wheel, and PayPal records live in the app.</h2>
+        <p>
+          Web readers can keep reading and collecting coins. When they are ready to withdraw, the flow points them into the Google Play app.
+        </p>
+      </div>
+      <a :href="APP_DOWNLOAD_URL" target="_blank" rel="noopener">Get ReadWin on Google Play</a>
+    </section>
+
+    <section v-if="featuredRail.length" class="home-section compact-rail">
+      <div class="home-section-head">
+        <div>
+          <p class="home-eyebrow">Featured shelf</p>
+          <h2>Start with these stories</h2>
         </div>
-      </section>
-
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-10">
-        <div class="download-shell">
-          <div>
-            <p class="section-kicker">ReadWin on the go</p>
-            <h2 class="download-title">Read anytime, anywhere.</h2>
-            <p class="download-summary">
-              Keep your latest stories synced, earn faster through daily tasks, and get the smoother chapter-reading experience inside the app.
-            </p>
-          </div>
-
-          <div class="download-actions">
-            <a
-              href="https://play.google.com/store/apps/details?id=me.readwin.app"
-              target="_blank"
-              rel="noopener"
-              class="download-primary"
-            >
-              Get it on Google Play
-            </a>
-            <router-link to="/explore" class="download-secondary">
-              Browse Online
-            </router-link>
-          </div>
-        </div>
-      </section>
-
-      <section class="mt-8 mb-8">
-        <AdMultiplex />
-      </section>
-    </main>
-
-    <AdSidebar side="right" />
-  </div>
+      </div>
+      <div class="rail-row">
+        <button v-for="story in featuredRail" :key="story.id" type="button" @click="openStory(story)">
+          <img :src="coverUrl(story.cover_url)" :alt="story.title" />
+          <span>{{ capitalize(story.title) }}</span>
+        </button>
+      </div>
+    </section>
+  </main>
 </template>
 
 <style scoped>
-.home-page {
+.web-app-home {
+  min-height: 100vh;
+  padding: 20px 16px 92px;
   background:
-    radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 28%),
-    radial-gradient(circle at top right, rgba(30, 64, 175, 0.1), transparent 24%),
-    linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(248, 250, 252, 1) 18%, rgba(241, 245, 249, 0.7) 100%);
+    linear-gradient(180deg, #fff7ed 0, #f8fafc 280px, #ffffff 100%);
+  color: #111827;
 }
 
-.hero-shell {
-  padding: 24px;
-  border-radius: 32px;
-  background:
-    linear-gradient(140deg, rgba(239, 246, 255, 0.96), rgba(255, 255, 255, 0.92)),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
-  box-shadow: 0 24px 60px -36px rgba(15, 23, 42, 0.28);
-}
-
-.hero-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.8fr);
-  gap: 28px;
-  align-items: center;
-}
-
-.hero-copy {
-  min-width: 0;
-}
-
-.hero-kicker,
-.section-kicker {
-  margin: 0 0 10px;
-  font-size: 12px;
-  line-height: 1;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: #2563eb;
-}
-
-.hero-title,
-.section-title,
-.spotlight-title,
-.rewards-title,
-.download-title {
-  margin: 0;
-  font-family: var(--font-reading);
-  letter-spacing: -0.03em;
-  color: var(--text-primary);
-}
-
-.hero-title {
-  font-size: clamp(2rem, 5vw, 4rem);
-  line-height: 1.02;
-  max-width: 12ch;
-}
-
-.hero-summary,
-.spotlight-summary,
-.rewards-summary,
-.download-summary {
-  margin: 18px 0 0;
-  max-width: 60ch;
-  font-size: 15px;
-  line-height: 1.8;
-  color: var(--text-secondary);
-}
-
-.hero-meta,
-.spotlight-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-.hero-meta span,
-.spotlight-stats span {
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-  box-shadow: 0 12px 24px -22px rgba(15, 23, 42, 0.35);
-}
-
-.hero-actions,
-.download-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 22px;
-}
-
-.hero-primary-cta,
-.download-primary,
-.rewards-cta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: 0 22px;
-  border-radius: 999px;
-  font-weight: 700;
-  color: white;
-  background: linear-gradient(135deg, #1d4ed8, #3b82f6);
-  box-shadow: 0 24px 36px -24px rgba(37, 99, 235, 0.7);
-}
-
-.hero-secondary-cta,
-.download-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 48px;
-  padding: 0 22px;
-  border-radius: 999px;
-  font-weight: 700;
-  color: #1d4ed8;
-  background: rgba(255, 255, 255, 0.82);
-  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.5);
-  backdrop-filter: blur(12px);
-}
-
-.hero-categories {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 26px;
-}
-
-.category-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: 0 12px 24px -22px rgba(15, 23, 42, 0.24);
-}
-
-.hero-visual {
-  position: relative;
-}
-
-.hero-cover-wrap {
-  position: relative;
-  padding: 12px 12px 0;
-}
-
-.hero-cover-glow {
-  position: absolute;
-  inset: 36px 48px auto;
-  height: 72%;
-  border-radius: 28px;
-  background-size: cover;
-  background-position: center;
-  filter: blur(46px);
-  opacity: 0.34;
-  transform: scale(1.02);
-}
-
-.hero-cover {
-  position: relative;
-  z-index: 1;
-  display: block;
-  width: min(100%, 360px);
+.home-hero,
+.home-section,
+.home-band {
+  max-width: 1180px;
   margin: 0 auto;
-  aspect-ratio: 3 / 4;
-  object-fit: cover;
-  border-radius: 28px;
-  box-shadow: 0 36px 50px -28px rgba(15, 23, 42, 0.45);
 }
 
-.hero-badge-card {
-  position: relative;
-  z-index: 2;
-  width: min(88%, 290px);
-  margin: -46px auto 0;
-  padding: 16px 18px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 20px 34px -28px rgba(15, 23, 42, 0.4);
+.home-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 420px);
+  gap: 20px;
+  align-items: stretch;
 }
 
-.hero-badge-label,
-.reward-label {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
+.home-hero-copy,
+.home-phone,
+.home-band,
+.home-section,
+.app-download-panel {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 22px 46px -38px rgba(15, 23, 42, 0.42);
+}
+
+.home-hero-copy {
+  padding: clamp(24px, 4vw, 52px);
+  background:
+    linear-gradient(135deg, rgba(16, 24, 40, 0.96), rgba(54, 18, 42, 0.94)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent);
+  color: #fff;
+}
+
+.home-eyebrow {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #2563eb;
+  color: #db2777;
 }
 
-.hero-badge-title {
-  margin: 8px 0 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
+.home-hero-copy .home-eyebrow {
+  color: #fbbf24;
 }
 
-.hero-badge-note {
-  margin: 6px 0 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+.home-hero h1 {
+  max-width: 760px;
+  margin: 0;
+  font-size: clamp(42px, 7vw, 82px);
+  line-height: 0.92;
+  font-weight: 900;
 }
 
-.hero-carousel {
+.home-lede {
+  max-width: 650px;
+  margin: 20px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.home-hero-actions,
+.home-balance-strip,
+.home-section-head,
+.category-row,
+.rail-row {
+  display: flex;
+  gap: 10px;
+}
+
+.home-hero-actions {
+  flex-wrap: wrap;
   margin-top: 28px;
 }
 
-.section-intro {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
+.home-primary,
+.home-secondary,
+.home-section-action,
+.app-download-panel a {
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-weight: 800;
+  transition: transform 140ms ease, box-shadow 140ms ease;
 }
 
-.section-title {
-  font-size: clamp(1.6rem, 3vw, 2.4rem);
+.home-primary {
+  border: 0;
+  color: #111827;
+  background: linear-gradient(135deg, #fbbf24, #f472b6);
 }
 
-.section-link {
-  font-size: 14px;
-  font-weight: 700;
-  color: #2563eb;
+.home-secondary,
+.home-section-action {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.continue-card,
-.trending-card,
-.completed-card {
-  display: block;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 18px 36px -32px rgba(15, 23, 42, 0.32);
-}
-
-.continue-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-}
-
-.continue-cover {
-  width: 76px;
-  aspect-ratio: 3 / 4;
-  border-radius: 18px;
-  object-fit: cover;
-  flex-shrink: 0;
-  box-shadow: 0 18px 28px -24px rgba(15, 23, 42, 0.4);
-}
-
-.continue-title,
-.completed-title,
-.trending-title {
-  margin: 0;
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
-.continue-title {
-  font-size: 15px;
-}
-
-.continue-meta,
-.completed-meta,
-.trending-subtitle,
-.trending-description {
-  margin: 6px 0 0;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.continue-progress-track {
-  height: 8px;
-  margin-top: 12px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(191, 219, 254, 0.45);
-}
-
-.continue-progress-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(135deg, #1d4ed8, #60a5fa);
-}
-
-.continue-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.spotlight-shell,
-.rewards-shell,
-.download-shell {
-  display: grid;
-  gap: 24px;
-  border-radius: 28px;
-  overflow: hidden;
-}
-
-.spotlight-shell {
-  grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.7fr);
-  padding: 26px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(239, 246, 255, 0.94));
-  box-shadow: 0 28px 54px -42px rgba(15, 23, 42, 0.34);
-}
-
-.spotlight-title {
-  font-size: clamp(1.9rem, 4vw, 3rem);
-  line-height: 1.05;
-}
-
-.spotlight-art {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.spotlight-cover {
-  width: min(100%, 320px);
-  aspect-ratio: 3 / 4;
-  border-radius: 24px;
-  object-fit: cover;
-  box-shadow: 0 28px 46px -30px rgba(15, 23, 42, 0.45);
-}
-
-.trending-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.trending-card {
-  padding: 18px;
-}
-
-.trending-rank {
+.home-download,
+.app-download-panel a {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 44px;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: rgba(30, 64, 175, 0.08);
-  color: #1d4ed8;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
+  text-decoration: none;
 }
 
-.trending-cover {
+.home-balance-strip {
+  flex-wrap: wrap;
+  margin-top: 28px;
+}
+
+.home-balance-strip div {
+  min-width: 140px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.home-balance-strip span,
+.home-band-copy span,
+.story-card small,
+.continue-item small,
+.reward-tile small {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.home-balance-strip span {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.home-balance-strip strong {
+  display: block;
+  margin-top: 4px;
+  color: #fff;
+  font-size: 22px;
+}
+
+.home-phone {
+  padding: 14px;
+  background: #0b0b0c;
+  color: #fff;
+}
+
+.phone-topbar,
+.phone-brand,
+.phone-feature,
+.phone-task-grid,
+.home-band,
+.home-section-head {
+  display: flex;
+  align-items: center;
+}
+
+.phone-topbar {
+  justify-content: space-between;
+}
+
+.phone-brand {
+  gap: 8px;
+}
+
+.phone-brand img {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.phone-topbar button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #111827;
+  background: #fbbf24;
+  font-weight: 800;
+}
+
+.phone-search {
   width: 100%;
-  aspect-ratio: 4 / 5;
-  margin-top: 14px;
-  border-radius: 20px;
+  margin-top: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 13px 14px;
+  text-align: left;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.phone-feature {
+  gap: 12px;
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: left;
+  background: linear-gradient(135deg, rgba(219, 39, 119, 0.26), rgba(245, 158, 11, 0.12));
+}
+
+.phone-feature img {
+  width: 82px;
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
   object-fit: cover;
 }
 
-.trending-title {
-  margin-top: 14px;
+.phone-feature span,
+.phone-feature small {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.phone-feature strong {
+  display: block;
+  margin: 6px 0;
   font-size: 18px;
+  line-height: 1.1;
+}
+
+.phone-task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.phone-task-grid button,
+.reward-tile,
+.story-card,
+.continue-item,
+.rail-row button {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  text-align: left;
+  background: #fff;
+}
+
+.phone-task-grid button {
+  min-height: 92px;
+  padding: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.phone-task-grid span,
+.reward-tile span {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.phone-task-grid span {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.phone-task-grid strong,
+.reward-tile strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 24px;
+}
+
+.home-band {
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px;
+  background: #fff;
+}
+
+.home-stat {
+  min-width: 92px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.home-stat strong,
+.home-stat span {
+  display: block;
+}
+
+.home-stat strong {
+  font-size: 22px;
+}
+
+.home-stat span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.home-band-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.home-section {
+  margin-top: 18px;
+  padding: 18px;
+  background: #fff;
+}
+
+.home-section-head {
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.home-section h2,
+.app-download-panel h2 {
+  margin: 0;
+  color: #111827;
+  font-size: clamp(24px, 3vw, 36px);
+  line-height: 1.05;
+  font-weight: 900;
+}
+
+.home-section-action {
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #111827;
+  background: #f8fafc;
+}
+
+.reward-grid,
+.story-grid,
+.continue-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.reward-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.reward-tile {
+  min-height: 164px;
+  padding: 16px;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.reward-tile:hover,
+.story-card:hover,
+.continue-item:hover,
+.rail-row button:hover,
+.home-primary:hover,
+.home-secondary:hover,
+.home-section-action:hover {
+  transform: translateY(-2px);
+}
+
+.category-row,
+.rail-row {
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.category-row button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #f8fafc;
+}
+
+.category-row button.active {
+  color: #fff;
+  background: #111827;
+}
+
+.category-row span,
+.category-row small {
+  display: block;
+}
+
+.category-row small {
+  opacity: 0.62;
+}
+
+.story-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.story-card,
+.continue-item {
+  padding: 10px;
+}
+
+.story-card img,
+.rail-row img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.story-card span,
+.continue-item span,
+.rail-row span {
+  display: block;
+  margin-top: 9px;
+  color: #111827;
+  font-weight: 800;
   line-height: 1.2;
 }
 
-.trending-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 14px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+.continue-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.completed-card {
-  padding: 12px;
+.continue-item {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  column-gap: 12px;
 }
 
-.completed-cover {
-  width: 100%;
+.continue-item img {
+  grid-row: span 3;
+  width: 64px;
   aspect-ratio: 3 / 4;
-  border-radius: 18px;
+  border-radius: 8px;
   object-fit: cover;
 }
 
-.completed-badge {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  padding: 7px 10px;
+.continue-item i {
+  height: 6px;
+  margin-top: 8px;
   border-radius: 999px;
-  background: rgba(245, 158, 11, 0.88);
-  color: white;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  background: #e2e8f0;
+  overflow: hidden;
 }
 
-.completed-title {
-  margin-top: 12px;
-  font-size: 14px;
+.continue-item b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, #db2777, #f59e0b);
 }
 
-.rewards-shell {
-  padding: 28px;
-  background: linear-gradient(135deg, #fff6de, #ffe9a8 52%, #ffd66e);
-  box-shadow: 0 28px 50px -38px rgba(180, 83, 9, 0.38);
-}
-
-.rewards-kicker,
-.reward-label {
-  color: #92400e;
-}
-
-.rewards-title {
-  font-size: clamp(1.9rem, 4vw, 3rem);
-  max-width: 14ch;
-  color: #5b3302;
-}
-
-.rewards-summary {
-  max-width: 56ch;
-  color: rgba(91, 51, 2, 0.82);
-}
-
-.rewards-grid {
+.app-download-panel {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.reward-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 18px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.56);
-  color: #5b3302;
-  backdrop-filter: blur(10px);
-}
-
-.reward-card strong {
-  font-size: 20px;
-}
-
-.reward-card span:last-child {
-  font-size: 13px;
-  line-height: 1.6;
-  color: rgba(91, 51, 2, 0.8);
-}
-
-.rewards-cta {
-  width: fit-content;
-  background: linear-gradient(135deg, #b45309, #f59e0b);
-  box-shadow: 0 24px 36px -28px rgba(180, 83, 9, 0.6);
-}
-
-.download-shell {
   grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
   align-items: center;
-  padding: 26px;
-  background: linear-gradient(145deg, rgba(30, 64, 175, 0.08), rgba(96, 165, 250, 0.08), rgba(255, 255, 255, 0.95));
-  box-shadow: 0 24px 44px -34px rgba(15, 23, 42, 0.28);
+  background: #111827;
+  color: #fff;
 }
 
-.download-title {
-  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+.app-download-panel h2 {
+  color: #fff;
 }
 
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
+.app-download-panel p {
+  max-width: 620px;
+  margin: 12px 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.7;
 }
 
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+.app-download-panel a {
+  color: #111827;
+  background: linear-gradient(135deg, #fbbf24, #f472b6);
 }
 
-@media (max-width: 1024px) {
-  .hero-grid,
-  .spotlight-shell,
-  .download-shell {
+.rail-row button {
+  flex: 0 0 150px;
+  padding: 10px;
+}
+
+@media (max-width: 980px) {
+  .home-hero,
+  .app-download-panel {
     grid-template-columns: 1fr;
   }
 
-  .trending-grid,
-  .rewards-grid {
+  .reward-grid,
+  .story-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .continue-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 768px) {
-  .hero-shell,
-  .spotlight-shell,
-  .rewards-shell,
-  .download-shell {
-    padding: 18px;
-    border-radius: 24px;
+@media (max-width: 620px) {
+  .web-app-home {
+    padding: 12px 10px 88px;
   }
 
-  .hero-title,
-  .section-title,
-  .spotlight-title,
-  .rewards-title,
-  .download-title {
-    max-width: none;
+  .home-hero-copy {
+    padding: 24px 18px;
   }
 
-  .section-intro {
-    align-items: start;
+  .home-hero h1 {
+    font-size: 42px;
+  }
+
+  .home-band {
+    align-items: stretch;
     flex-direction: column;
   }
 
-  .continue-card {
-    align-items: start;
+  .home-section-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

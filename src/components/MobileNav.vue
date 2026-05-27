@@ -15,7 +15,8 @@ const tabs = nativeApp
   : [
       { path: '/', label: 'Home', icon: 'home' },
       { path: '/explore', label: 'Explore', icon: 'explore' },
-      { path: '/bookshelf', label: 'Shelf', icon: 'book' },
+      { path: '/reward', label: 'Earn', icon: 'gift' },
+      { path: '/wallet', label: 'Wallet', icon: 'wallet' },
       { path: '/profile', label: 'Me', icon: 'user' },
     ]
 
@@ -48,6 +49,7 @@ function isActive(path: string): boolean {
         <svg v-if="tab.icon === 'explore'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 9l3.75 1.25L14 14l-3.75-1.25L9 9z"/></svg>
         <svg v-if="tab.icon === 'book'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
         <svg v-if="tab.icon === 'gift'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13H7.5a2.5 2.5 0 110-5c1.657 0 2.805 1.54 4.5 5zm0 0h4.5a2.5 2.5 0 100-5c-1.657 0-2.805 1.54-4.5 5zm-7 4h14v4a2 2 0 01-2 2H7a2 2 0 01-2-2v-4z"/></svg>
+        <svg v-if="tab.icon === 'wallet'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 8V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h14a2 2 0 002-2v-1m0-8h-7a2 2 0 000 4h7V8z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 12h.01"/></svg>
         <svg v-if="tab.icon === 'user'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
         <span class="text-xs font-medium">{{ tab.label }}</span>
       </router-link>

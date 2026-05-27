@@ -151,7 +151,7 @@ const quickActions = [
   },
   {
     label: 'Withdraw',
-    desc: 'Move eligible commission rewards into cash-out flow.',
+    desc: 'Open the app handoff for PayPal cash-out.',
     route: '/withdraw',
     accent: 'linear-gradient(135deg, #21424a, #38a6a5)',
   },
@@ -377,13 +377,13 @@ function normalizeDiamondType(type?: string | null): WalletLog['type'] {
               <p class="wallet-side-note">
                 {{
                   withdrawRemaining === 0
-                    ? 'You are eligible for withdrawal. Move your commission into the cash-out flow whenever you’re ready.'
-                    : `${formatNum(withdrawRemaining)} more diamonds to reach your next payout window.`
+                    ? 'You are eligible for app cash-out. The web button will hand you to the Android app.'
+                    : `${formatNum(withdrawRemaining)} more diamonds to reach your next app payout window.`
                 }}
               </p>
 
               <button class="wallet-inline-cta" :disabled="withdrawRemaining > 0" @click="openWalletRoute('Withdraw progress', '/withdraw')">
-                {{ withdrawRemaining === 0 ? 'Withdraw now' : 'Keep earning' }}
+                {{ withdrawRemaining === 0 ? 'Cash out in app' : 'Keep earning' }}
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ import { useUserStore } from '@/stores/user'
 import { showIAP } from '@/composables/useIAP'
 import { useAds } from '@/composables/useAds'
 import { achievementApi } from '@/services/api'
+import { APP_DOWNLOAD_URL } from '@/config'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -58,12 +59,14 @@ const navLinks = [
   { name: 'Home', path: '/' },
   { name: 'Explore', path: '/explore' },
   { name: 'Rankings', path: '/rankings' },
+  { name: 'Earn', path: '/reward' },
+  { name: 'Wallet', path: '/wallet' },
   { name: 'Bookshelf', path: '/bookshelf' },
 ]
 </script>
 
 <template>
-  <header class="sticky top-0 z-50 h-14 border-b" style="background-color: var(--bg-card); border-color: var(--border-default)">
+  <header class="sticky top-0 z-50 h-14 border-b app-header" style="background-color: var(--bg-card); border-color: var(--border-default)">
     <div class="mx-auto max-w-[1280px] h-full flex items-center justify-between px-4 lg:px-6">
       <!-- Logo -->
       <router-link to="/" class="flex items-center gap-2 shrink-0">
@@ -72,7 +75,7 @@ const navLinks = [
       </router-link>
 
       <!-- Nav Links (desktop only) -->
-      <nav class="hidden md:flex items-center gap-6 ml-8">
+      <nav class="hidden lg:flex items-center gap-5 ml-8">
         <router-link
           v-for="link in navLinks" :key="link.path" :to="link.path"
           class="text-sm font-medium transition-colors hover:text-primary-600"
@@ -107,9 +110,18 @@ const navLinks = [
         </button>
 
         <!-- Coin balance -->
-        <router-link v-if="userStore.isLoggedIn && showIAP" to="/wallet" class="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold" style="background: rgba(245,158,11,0.1); color: #F59E0B">
-          <img src="/coin.svg" alt="" class="w-3.5 h-3.5" /> {{ userStore.user?.coin_balance ?? 0 }}
+        <router-link to="/wallet" class="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold" style="background: rgba(245,158,11,0.1); color: #B45309">
+          <img src="/coin.svg" alt="" class="w-3.5 h-3.5" /> {{ (userStore.displayCoinBalance ?? userStore.user?.coin_balance ?? 0).toLocaleString() }}
         </router-link>
+
+        <a
+          :href="APP_DOWNLOAD_URL"
+          target="_blank"
+          rel="noopener"
+          class="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white rounded-full app-download-link"
+        >
+          Download App
+        </a>
 
         <!-- Avatar / Login -->
         <router-link v-if="userStore.isLoggedIn" to="/profile" class="ml-0.5">
@@ -129,6 +141,16 @@ const navLinks = [
 </template>
 
 <style scoped>
+.app-header {
+  backdrop-filter: blur(14px);
+  background-color: color-mix(in srgb, var(--bg-card) 90%, transparent) !important;
+}
+
+.app-download-link {
+  background: linear-gradient(135deg, #0f172a, #db2777 55%, #f59e0b);
+  box-shadow: 0 10px 24px -20px rgba(15, 23, 42, 0.8);
+}
+
 .header-badge-pulse {
   animation: badge-pulse 1.5s ease-in-out infinite;
 }

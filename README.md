@@ -24,6 +24,7 @@ Copy `.env.example` to `.env` and change the domain:
 ```bash
 VITE_API_BASE_URL=https://readwin.me
 VITE_ASSET_BASE_URL=https://readwin.me
+VITE_APP_DOWNLOAD_URL=https://play.google.com/store/apps/details?id=me.readwin.app
 ```
 
 When these values are not set, the standalone web build defaults both API calls and relative cover images to `https://readwin.me`. In local dev, Vite also proxies `/api` to `https://readwin.me` by default.

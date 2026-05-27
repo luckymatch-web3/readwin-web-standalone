@@ -1,154 +1,254 @@
 <script setup lang="ts">
-import { Capacitor } from '@capacitor/core'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import LoginGate from '@/components/LoginGate.vue'
 import CoinIcon from '@/components/CoinIcon.vue'
-import NativeRewardScreen from '@/components/app/NativeRewardScreen.vue'
-import { useAds } from '@/composables/useAds'
-import { coinApi } from '@/services/api'
+import { APP_DOWNLOAD_URL } from '@/config'
 import { Analytics } from '@/services/analytics'
-import { isNativeApp } from '@/services/admob'
+import { useBookshelfStore } from '@/stores/bookshelf'
+import { useNovelStore } from '@/stores/novel'
 import { useToastStore } from '@/stores/toast'
 import { useUserStore } from '@/stores/user'
+import { coverUrl } from '@/utils/cover'
+import { capitalize } from '@/utils/text'
+import type { Novel } from '@/types'
 
-interface CoinLog {
-  id: number
+type RewardTaskKey = 'daily_checkin' | 'reading_sprint' | 'web_chest' | 'app_video' | 'app_wheel'
+
+type RewardTask = {
+  key: RewardTaskKey
+  title: string
   amount: number
-  balance_after: number
-  type: string
-  description: string | null
-  created_at: string
+  cadence: string
+  note: string
+  appOnly?: boolean
+  onceDaily?: boolean
 }
 
-const DAILY_LIMIT = 5
-const REWARD_PER_AD = 30
+type WebRewardLog = {
+  id: number
+  title: string
+  amount: number
+  balance_after: number
+  source: RewardTaskKey
+  created_at: string
+  note: string
+}
+
+const WEB_REWARD_LOGS_KEY = 'readwin-web-reward-logs'
+const WEB_DAILY_REWARD_PREFIX = 'readwin-web-daily-reward'
 
 const router = useRouter()
+const novelStore = useNovelStore()
+const bookshelfStore = useBookshelfStore()
 const toastStore = useToastStore()
 const userStore = useUserStore()
-const { isRewardedReady, isLoading: adLoading, preloadRewarded, showRewarded } = useAds()
-const nativeApp = isNativeApp()
 
-const watchingAd = ref(false)
 const loading = ref(true)
-const adLogs = ref<CoinLog[]>([])
+const rewardLogs = ref<WebRewardLog[]>([])
+const claimedToday = ref<Record<string, boolean>>({})
 
-const isNative = computed(() => Capacitor.isNativePlatform())
-const adsToday = computed(() => adLogs.value.filter(log => isSameDay(log.created_at, new Date())).length)
-const adsTotal = computed(() => adLogs.value.length)
-const earnedToday = computed(() =>
-  adLogs.value
-    .filter(log => isSameDay(log.created_at, new Date()))
-    .reduce((sum, log) => sum + Math.max(log.amount, 0), 0),
-)
-const remainingAds = computed(() => Math.max(DAILY_LIMIT - adsToday.value, 0))
-const dailyProgress = computed(() => Math.min((adsToday.value / DAILY_LIMIT) * 100, 100))
-const recentLogs = computed(() => adLogs.value.slice(0, 6))
-const actionLabel = computed(() => {
-  if (!isNative.value) return 'Rewarded ads are available inside the Android app.'
-  if (remainingAds.value <= 0) return 'Daily limit reached. Come back tomorrow.'
-  if (watchingAd.value) return 'Opening ad...'
-  if (adLoading.value && !isRewardedReady.value) return 'Loading rewarded inventory...'
-  return `Watch one ad and earn ${REWARD_PER_AD} coins`
-})
-
-const realityCards = computed(() => [
+const rewardTasks = computed<RewardTask[]>(() => [
   {
-    title: 'Reward rule',
-    value: `${REWARD_PER_AD} coins`,
-    note: 'Each completed rewarded ad grants the same real backend reward.',
+    key: 'daily_checkin',
+    title: 'Daily check-in',
+    amount: 1000,
+    cadence: 'Once today',
+    note: 'Keep a web streak and add a meaningful coin boost before reading.',
+    onceDaily: true,
   },
   {
-    title: 'Daily cap',
-    value: `${DAILY_LIMIT} ads`,
-    note: `${remainingAds.value} attempt${remainingAds.value === 1 ? '' : 's'} remaining today.`,
+    key: 'reading_sprint',
+    title: 'Read a chapter sprint',
+    amount: 300,
+    cadence: 'Once today',
+    note: 'Start a free chapter from the web shelf and collect a reader bonus.',
+    onceDaily: true,
   },
   {
-    title: 'Wallet balance',
-    value: `${formatNumber(userStore.displayCoinBalance)} coins`,
-    note: 'The reward lands directly in your real coin balance after the backend records it.',
+    key: 'web_chest',
+    title: 'Open web chest',
+    amount: 200,
+    cadence: 'Once today',
+    note: 'A light web-only reward so new readers can feel the wallet grow.',
+    onceDaily: true,
+  },
+  {
+    key: 'app_video',
+    title: 'Rewarded video',
+    amount: 30,
+    cadence: 'Android app',
+    note: 'Video inventory and ad callbacks stay in the app where the SDK runs.',
+    appOnly: true,
+  },
+  {
+    key: 'app_wheel',
+    title: 'Lucky wheel',
+    amount: 500,
+    cadence: 'Android app',
+    note: 'App-only events, payout review, and PayPal details continue there.',
+    appOnly: true,
   },
 ])
 
+const readingStory = computed(() =>
+  novelStore.featuredNovels[0] || novelStore.hotNovels[0] || novelStore.novels[0] || null,
+)
+const suggestedStories = computed(() => {
+  const seen = new Set<number>()
+  return [...novelStore.hotNovels, ...novelStore.featuredNovels, ...novelStore.novels]
+    .filter(story => {
+      if (seen.has(story.id)) return false
+      seen.add(story.id)
+      return true
+    })
+    .slice(0, 6)
+})
+const webTasks = computed(() => rewardTasks.value.filter(task => !task.appOnly))
+const appTasks = computed(() => rewardTasks.value.filter(task => task.appOnly))
+const coinBalance = computed(() => Number(userStore.displayCoinBalance || 0))
+const estimatedCash = computed(() => Math.max(0, coinBalance.value / 10000))
+const earnedToday = computed(() =>
+  rewardLogs.value
+    .filter(log => isToday(log.created_at))
+    .reduce((sum, log) => sum + Math.max(0, Number(log.amount || 0)), 0),
+)
+const completedToday = computed(() =>
+  webTasks.value.filter(task => hasClaimedToday(task.key)).length,
+)
+const dailyProgress = computed(() =>
+  webTasks.value.length ? Math.round((completedToday.value / webTasks.value.length) * 100) : 0,
+)
+
 onMounted(async () => {
-  if (isNative.value) {
-    preloadRewarded()
-  }
-  await loadStats()
+  loading.value = true
+  await novelStore.init()
+  loadRewardLogs()
+  refreshClaimedState()
+  loading.value = false
 })
 
-async function loadStats() {
-  loading.value = true
-  if (!userStore.isLoggedIn) {
-    adLogs.value = []
-    loading.value = false
+function claimTask(task: RewardTask) {
+  if (task.appOnly) {
+    openAppDownload(task.key)
     return
   }
-  try {
-    const data = await coinApi.logs(1, 100)
-    adLogs.value = (data.items || []).filter((item: CoinLog) => item.type === 'ad_reward')
-  } finally {
-    loading.value = false
+  if (task.onceDaily && hasClaimedToday(task.key)) {
+    toastStore.show('This web reward is already claimed today.', 'info')
+    return
+  }
+
+  userStore.addCoins(task.amount)
+  const log: WebRewardLog = {
+    id: Date.now(),
+    title: task.title,
+    amount: task.amount,
+    balance_after: userStore.displayCoinBalance,
+    source: task.key,
+    created_at: new Date().toISOString(),
+    note: task.note,
+  }
+
+  rewardLogs.value = [log, ...rewardLogs.value].slice(0, 30)
+  saveRewardLogs()
+  if (task.onceDaily) {
+    localStorage.setItem(dailyKey(task.key), currentDayKey())
+    refreshClaimedState()
+  }
+
+  Analytics.coinsEarned(task.key, task.amount)
+  Analytics.rewardAction('web_reward_claimed', {
+    reward_key: task.key,
+    amount: task.amount,
+    balance_after: userStore.displayCoinBalance,
+  })
+  toastStore.show(`+${task.amount.toLocaleString()} coins added.`, 'success')
+
+  if (task.key === 'reading_sprint') {
+    startReading()
   }
 }
 
-async function handleWatchAd() {
-  if (!isNative.value) {
-    toastStore.show('Rewarded ads are only live in the Android app right now.', 'info')
-    return
-  }
-  if (remainingAds.value <= 0) {
-    toastStore.show('Daily ad limit reached. Come back tomorrow.', 'warning')
-    return
-  }
+function claimDailyCheckin() {
+  const task = webTasks.value.find(item => item.key === 'daily_checkin')
+  if (task) claimTask(task)
+}
 
-  watchingAd.value = true
+function startReading(story?: Novel | null) {
+  const target = story || readingStory.value || novelStore.novels[0]
+  if (!target) {
+    router.push('/explore')
+    return
+  }
+  bookshelfStore.addToBookshelf(target)
+  router.push(`/book/${target.id}/chapter/1`)
+}
+
+function openAppDownload(source: string) {
+  Analytics.rewardAction('download_app_from_reward', {
+    source,
+    coin_balance: coinBalance.value,
+  })
+  window.open(APP_DOWNLOAD_URL, '_blank', 'noopener')
+}
+
+function loadRewardLogs() {
   try {
-    const shown = await showRewarded(
-      async () => {
-        try {
-          const data = await coinApi.earn('ad_reward')
-          userStore.updateCoinBalance(data.balance)
-          toastStore.show(`+${data.reward_coins || REWARD_PER_AD} coins added to your wallet.`, 'success')
-          Analytics.coinsEarned('ad_reward', data.reward_coins || REWARD_PER_AD)
-          await loadStats()
-        } catch (error: any) {
-          toastStore.show(error.message || 'We could not record that reward.', 'error')
-          await loadStats()
-        }
-      },
-      {
-        source: 'earn_page_watch_ad',
-        rewardReason: 'daily_watch_ad_task',
-        rewardAmount: REWARD_PER_AD,
-        currencyType: 'coins',
-        screenName: 'earn',
-      },
-    )
-
-    if (!shown) {
-      toastStore.show('No rewarded ad is available at the moment. Try again shortly.', 'info')
-    }
+    const raw = localStorage.getItem(WEB_REWARD_LOGS_KEY)
+    rewardLogs.value = raw ? JSON.parse(raw) : []
   } catch {
-    toastStore.show('Rewarded ad failed to open.', 'error')
-  } finally {
-    watchingAd.value = false
+    rewardLogs.value = []
   }
 }
 
-function isSameDay(value: string, date: Date): boolean {
-  const current = new Date(value)
-  return current.getFullYear() === date.getFullYear()
-    && current.getMonth() === date.getMonth()
-    && current.getDate() === date.getDate()
+function saveRewardLogs() {
+  localStorage.setItem(WEB_REWARD_LOGS_KEY, JSON.stringify(rewardLogs.value))
 }
 
-function formatNumber(value: number): string {
+function refreshClaimedState() {
+  const state: Record<string, boolean> = {}
+  rewardTasks.value.forEach(task => {
+    if (task.onceDaily) {
+      state[task.key] = localStorage.getItem(dailyKey(task.key)) === currentDayKey()
+    }
+  })
+  claimedToday.value = state
+}
+
+function hasClaimedToday(key: RewardTaskKey) {
+  return Boolean(claimedToday.value[key])
+}
+
+function taskActionLabel(task: RewardTask) {
+  if (task.appOnly) return 'Open app'
+  if (hasClaimedToday(task.key)) return 'Done today'
+  if (task.key === 'reading_sprint') return 'Claim and read'
+  return 'Claim coins'
+}
+
+function dailyKey(key: RewardTaskKey) {
+  return `${WEB_DAILY_REWARD_PREFIX}-${key}`
+}
+
+function currentDayKey() {
+  const now = new Date()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
+function isToday(value: string) {
+  if (!value) return false
+  const date = new Date(value)
+  return date.getFullYear() === new Date().getFullYear()
+    && date.getMonth() === new Date().getMonth()
+    && date.getDate() === new Date().getDate()
+}
+
+function formatNumber(value: number) {
   return Number(value || 0).toLocaleString()
 }
 
-function formatDate(value: string): string {
+function formatDate(value: string) {
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
@@ -159,583 +259,548 @@ function formatDate(value: string): string {
 </script>
 
 <template>
-  <NativeRewardScreen v-if="nativeApp" />
-  <main v-else class="earn-page pb-24">
-    <LoginGate message="Log in to watch rewarded ads and earn reader coins.">
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 pt-4 md:pt-6">
-        <div class="earn-hero">
-          <div class="earn-hero-copy">
-            <div class="hero-topline">
-              <button class="hero-back" @click="router.back()">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-              </button>
-              <p class="section-kicker">Watch and earn</p>
-            </div>
+  <main class="earn-page">
+    <section class="earn-hero">
+      <div class="earn-hero-copy">
+        <p class="section-kicker">Reward center</p>
+        <h1>Earn coins on web. Cash out in the app.</h1>
+        <p>
+          Readers can now collect daily web rewards, read free chapters, and watch their balance grow before moving to the Android app for ad videos, PayPal details, and payout review.
+        </p>
 
-            <h1 class="hero-title">A simple coin lane, now grounded in the real backend rules.</h1>
-            <p class="hero-summary">
-              This page no longer pretends there are fake tiers or diamond bonuses. The real rule is straightforward: one completed rewarded ad grants 30 coins, and the backend caps the flow at five successful ads per day.
-            </p>
-
-            <div class="hero-chip-row">
-              <span class="hero-chip">30 coins per completed ad</span>
-              <span class="hero-chip">5 rewarded ads per day</span>
-              <span class="hero-chip">{{ isNative ? 'Android app supported' : 'Web preview only' }}</span>
-            </div>
-          </div>
-
-          <div class="earn-hero-card">
-            <p class="progress-label">Today</p>
-            <p class="progress-value">{{ adsToday }} <span>/ {{ DAILY_LIMIT }}</span></p>
-
-            <div class="progress-track">
-              <div class="progress-fill" :style="{ width: `${dailyProgress}%` }"></div>
-            </div>
-
-            <div class="progress-grid">
-              <div>
-                <span>Earned today</span>
-                <strong>{{ earnedToday }}</strong>
-              </div>
-              <div>
-                <span>Lifetime ads</span>
-                <strong>{{ adsTotal }}</strong>
-              </div>
-              <div>
-                <span>Remaining</span>
-                <strong>{{ remainingAds }}</strong>
-              </div>
-            </div>
-
-            <button class="earn-primary" :disabled="watchingAd || remainingAds <= 0 || !isNative" @click="handleWatchAd">
-              {{ actionLabel }}
-            </button>
-          </div>
+        <div class="earn-actions">
+          <button type="button" class="earn-primary" @click="claimDailyCheckin">
+            Daily check-in
+          </button>
+          <button type="button" class="earn-secondary" @click="startReading()">
+            Start reading
+          </button>
+          <a class="earn-secondary" :href="APP_DOWNLOAD_URL" target="_blank" rel="noopener">
+            Download app
+          </a>
         </div>
-      </section>
+      </div>
 
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-8">
-        <div class="reality-grid">
-          <div v-for="card in realityCards" :key="card.title" class="reality-card">
-            <p class="section-kicker">Reality check</p>
-            <h2>{{ card.title }}</h2>
-            <p class="reality-value">{{ card.value }}</p>
-            <p class="reality-note">{{ card.note }}</p>
-          </div>
+      <aside class="earn-wallet-card">
+        <div class="wallet-card-head">
+          <span class="coin-badge"><CoinIcon size="20px" /> Coins</span>
+          <span>{{ completedToday }}/{{ webTasks.length }} web tasks</span>
         </div>
-      </section>
-
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-8">
-        <div class="earn-grid">
-          <div class="panel-card">
-            <div class="section-head">
-              <div>
-                <p class="section-kicker">How it works</p>
-                <h2 class="section-title">Rewarded ads, without fake gamification</h2>
-              </div>
-            </div>
-
-            <ul class="rule-list">
-              <li>Watch the full rewarded video and let the reward callback fire.</li>
-              <li>The backend records the reward and adds 30 coins to your real wallet balance.</li>
-              <li>Once you reach 5 successful ads today, the flow pauses until tomorrow.</li>
-            </ul>
-
-            <div v-if="!isNative" class="native-callout">
-              <strong>Web note</strong>
-              <p>The page is visible on web, but actual rewarded ad inventory is currently available in the Android app only.</p>
-            </div>
-
-            <div class="cta-row">
-              <button class="ghost-action" @click="router.push('/wallet')">Open wallet</button>
-              <button class="ghost-action" @click="router.push('/reward')">Open rewards</button>
-            </div>
-          </div>
-
-          <div class="panel-card panel-card-dark">
-            <div class="section-head">
-              <div>
-                <p class="section-kicker">Reward state</p>
-                <h2 class="section-title">Current ad availability</h2>
-              </div>
-            </div>
-
-            <div class="status-stack">
-              <div class="status-row">
-                <span>Native app</span>
-                <strong>{{ isNative ? 'Ready' : 'Not on this device' }}</strong>
-              </div>
-              <div class="status-row">
-                <span>Reward inventory</span>
-                <strong>{{ isRewardedReady ? 'Prepared' : adLoading ? 'Loading' : 'Idle' }}</strong>
-              </div>
-              <div class="status-row">
-                <span>Wallet coins</span>
-                <strong>{{ formatNumber(userStore.displayCoinBalance) }}</strong>
-              </div>
-            </div>
-          </div>
+        <strong>{{ formatNumber(coinBalance) }}</strong>
+        <p>Estimated cash value: ${{ estimatedCash.toFixed(2) }}</p>
+        <div class="progress-track">
+          <div class="progress-fill" :style="{ width: `${dailyProgress}%` }"></div>
         </div>
-      </section>
+        <button type="button" @click="router.push('/withdraw')">Cashout opens in app</button>
+      </aside>
+    </section>
 
-      <section class="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 mt-8">
-        <div class="activity-shell">
-          <div class="section-head">
-            <div>
-              <p class="section-kicker">Recent reward events</p>
-              <h2 class="section-title">Your latest successful ad rewards</h2>
-            </div>
-            <button class="ghost-action" @click="loadStats">Refresh</button>
-          </div>
+    <section class="earn-snapshot">
+      <div>
+        <span>Earned today</span>
+        <strong>+{{ formatNumber(earnedToday) }}</strong>
+      </div>
+      <div>
+        <span>Web balance</span>
+        <strong>{{ formatNumber(coinBalance) }}</strong>
+      </div>
+      <div>
+        <span>Payout lane</span>
+        <strong>Android app</strong>
+      </div>
+    </section>
 
-          <div v-if="loading" class="panel-loading">
-            <span class="spinner"></span>
-            <p>Loading reward history...</p>
-          </div>
-
-          <div v-else-if="!recentLogs.length" class="empty-shell">
-            <span class="empty-icon">AD</span>
-            <h3>No rewarded ads logged yet</h3>
-            <p>Your completed ad rewards will appear here after the backend records them.</p>
-          </div>
-
-          <div v-else class="activity-list">
-            <article v-for="item in recentLogs" :key="item.id" class="activity-card">
-              <div class="activity-icon">
-                <CoinIcon size="14px" />
-              </div>
-
-              <div class="activity-copy">
-                <div class="activity-head">
-                  <div>
-                    <p class="activity-title">Rewarded ad completed</p>
-                    <p class="activity-detail">{{ item.description || 'Backend reward captured successfully.' }}</p>
-                  </div>
-                  <span class="activity-amount">+{{ item.amount }}</span>
-                </div>
-
-                <div class="activity-meta">
-                  <span>{{ formatDate(item.created_at) }}</span>
-                  <span>Balance after {{ formatNumber(item.balance_after) }} coins</span>
-                </div>
-              </div>
-            </article>
-          </div>
+    <section class="earn-section">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Web tasks</p>
+          <h2>Claim rewards here</h2>
         </div>
-      </section>
-    </LoginGate>
+      </div>
+
+      <div class="task-grid">
+        <article v-for="task in webTasks" :key="task.key" class="task-card">
+          <div class="task-topline">
+            <span>{{ task.cadence }}</span>
+            <strong>+{{ formatNumber(task.amount) }}</strong>
+          </div>
+          <h3>{{ task.title }}</h3>
+          <p>{{ task.note }}</p>
+          <button
+            type="button"
+            :disabled="hasClaimedToday(task.key)"
+            @click="claimTask(task)"
+          >
+            {{ taskActionLabel(task) }}
+          </button>
+        </article>
+      </div>
+    </section>
+
+    <section class="earn-section app-lane">
+      <div>
+        <p class="section-kicker">App-only rewards</p>
+        <h2>Keep high-value actions inside the Android app</h2>
+        <p>
+          Rewarded video SDK callbacks, lucky wheel events, PayPal account binding, and withdrawal review should stay in the app. The web page hands users there at the right moment.
+        </p>
+      </div>
+      <div class="app-task-list">
+        <button v-for="task in appTasks" :key="task.key" type="button" @click="claimTask(task)">
+          <span>{{ task.title }}</span>
+          <strong>{{ task.cadence }}</strong>
+          <small>{{ task.note }}</small>
+        </button>
+      </div>
+    </section>
+
+    <section v-if="suggestedStories.length" class="earn-section story-lane">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Read and grow</p>
+          <h2>Pick a free chapter</h2>
+        </div>
+        <button type="button" class="section-action" @click="router.push('/explore')">Explore all</button>
+      </div>
+
+      <div class="story-grid">
+        <button v-for="story in suggestedStories" :key="story.id" type="button" @click="startReading(story)">
+          <img :src="coverUrl(story.cover_url)" :alt="story.title">
+          <span>{{ capitalize(story.title) }}</span>
+          <small>{{ story.total_chapters }} chapters</small>
+        </button>
+      </div>
+    </section>
+
+    <section class="earn-section history-section">
+      <div class="section-head">
+        <div>
+          <p class="section-kicker">Recent rewards</p>
+          <h2>Web coin log</h2>
+        </div>
+      </div>
+
+      <div v-if="loading" class="empty-state">Loading rewards...</div>
+      <div v-else-if="!rewardLogs.length" class="empty-state">
+        Claim your first web task and it will appear here.
+      </div>
+      <div v-else class="reward-log-list">
+        <article v-for="log in rewardLogs.slice(0, 8)" :key="log.id" class="reward-log">
+          <div>
+            <strong>{{ log.title }}</strong>
+            <span>{{ formatDate(log.created_at) }}</span>
+          </div>
+          <p>+{{ formatNumber(log.amount) }} coins</p>
+        </article>
+      </div>
+    </section>
   </main>
 </template>
 
 <style scoped>
 .earn-page {
+  min-height: 100vh;
+  padding: 20px 16px 92px;
   background:
-    radial-gradient(circle at top left, rgba(46, 123, 216, 0.14), transparent 22%),
-    radial-gradient(circle at top right, rgba(212, 169, 45, 0.16), transparent 20%),
-    linear-gradient(180deg, #f6f3ed 0%, #f4f8fe 34%, #fbfcff 100%);
+    linear-gradient(180deg, #fff7ed 0, #f8fafc 260px, #fff 100%);
+  color: #111827;
 }
 
 .earn-hero,
-.earn-hero-card,
-.reality-card,
-.panel-card,
-.activity-shell,
-.activity-card {
-  border-radius: 1.7rem;
-  border: 1px solid rgba(16, 45, 84, 0.07);
-  box-shadow: 0 24px 45px -38px rgba(13, 26, 50, 0.28);
-}
-
-.earn-hero,
-.reality-grid,
-.earn-grid {
-  display: grid;
-  gap: 1.5rem;
+.earn-snapshot,
+.earn-section {
+  max-width: 1180px;
+  margin: 0 auto;
 }
 
 .earn-hero {
-  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 16px;
 }
 
 .earn-hero-copy,
-.earn-hero-card,
-.reality-card,
-.panel-card,
-.activity-shell {
-  padding: clamp(1.4rem, 2vw, 2rem);
+.earn-wallet-card,
+.earn-snapshot,
+.earn-section {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 22px 46px -38px rgba(15, 23, 42, 0.44);
 }
 
 .earn-hero-copy {
-  border-radius: 1.9rem;
-  background: linear-gradient(135deg, rgba(12, 44, 80, 0.97), rgba(43, 115, 201, 0.93));
-  color: #fdfefe;
-}
-
-.hero-topline,
-.progress-grid,
-.section-head,
-.cta-row,
-.status-row,
-.activity-head,
-.activity-meta {
-  display: flex;
-  gap: 1rem;
-}
-
-.hero-topline,
-.section-head,
-.status-row,
-.activity-head,
-.activity-meta {
-  align-items: center;
-  justify-content: space-between;
-}
-
-.hero-back {
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: #fdfefe;
+  padding: clamp(24px, 4vw, 52px);
+  color: #fff;
+  background:
+    linear-gradient(135deg, rgba(17, 24, 39, 0.96), rgba(112, 26, 117, 0.88)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent);
 }
 
 .section-kicker {
-  margin-bottom: 0.8rem;
+  margin: 0 0 10px;
+  color: #db2777;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: rgba(31, 75, 126, 0.66);
 }
 
-.earn-hero-copy .section-kicker,
-.panel-card-dark .section-kicker {
-  color: rgba(219, 234, 255, 0.76);
+.earn-hero-copy .section-kicker {
+  color: #fbbf24;
 }
 
-.hero-title {
+.earn-hero h1 {
+  max-width: 700px;
   margin: 0;
-  font-size: clamp(2.3rem, 4.3vw, 3.9rem);
-  line-height: 0.95;
-  letter-spacing: -0.05em;
-  font-weight: 700;
-  max-width: 11ch;
+  font-size: clamp(40px, 7vw, 76px);
+  line-height: 0.94;
+  font-weight: 950;
 }
 
-.hero-summary {
-  margin-top: 1rem;
-  max-width: 58ch;
-  color: rgba(235, 244, 255, 0.86);
+.earn-hero p {
+  max-width: 650px;
+  margin: 18px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 17px;
   line-height: 1.7;
 }
 
-.hero-chip-row {
+.earn-actions,
+.section-head,
+.task-topline,
+.wallet-card-head,
+.earn-snapshot,
+.reward-log,
+.story-grid {
   display: flex;
+  align-items: center;
+}
+
+.earn-actions {
   flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-top: 1.5rem;
+  gap: 10px;
+  margin-top: 28px;
 }
 
-.hero-chip {
-  padding: 0.7rem 1rem;
-  border-radius: 999px;
+.earn-primary,
+.earn-secondary,
+.earn-wallet-card button,
+.task-card button,
+.section-action {
+  min-height: 44px;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-weight: 850;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.earn-primary {
+  border: 0;
+  color: #111827;
+  background: linear-gradient(135deg, #fbbf24, #f472b6);
+}
+
+.earn-secondary {
+  display: inline-flex;
+  align-items: center;
   border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+  text-decoration: none;
   background: rgba(255, 255, 255, 0.08);
-  font-size: 0.92rem;
-  color: rgba(248, 252, 255, 0.92);
 }
 
-.earn-hero-card,
-.reality-card,
-.panel-card,
-.activity-shell {
-  background: rgba(255, 255, 255, 0.88);
+.earn-primary:hover,
+.earn-secondary:hover,
+.earn-wallet-card button:hover,
+.task-card button:hover,
+.section-action:hover {
+  transform: translateY(-1px);
 }
 
-.progress-label,
-.reality-note,
-.rule-list,
-.native-callout p,
-.activity-detail,
-.activity-meta,
-.panel-loading p,
-.empty-shell p {
-  color: #5d6f85;
+.earn-wallet-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px;
+  background: #fff;
 }
 
-.progress-value {
-  margin-top: 0.2rem;
-  font-size: clamp(2.4rem, 5vw, 3.3rem);
+.wallet-card-head {
+  justify-content: space-between;
+  gap: 12px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.coin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #111827;
+}
+
+.earn-wallet-card strong {
+  font-size: clamp(44px, 8vw, 72px);
   line-height: 1;
-  font-weight: 700;
-  color: #0f3f6d;
+  font-weight: 950;
 }
 
-.progress-value span {
-  font-size: 1.2rem;
-  color: #74869b;
+.earn-wallet-card p {
+  margin: 0;
+  color: #64748b;
 }
 
 .progress-track {
-  height: 0.8rem;
-  margin-top: 1.3rem;
-  border-radius: 999px;
-  background: rgba(15, 63, 109, 0.1);
+  width: 100%;
+  height: 10px;
   overflow: hidden;
+  border-radius: 999px;
+  background: #e5e7eb;
 }
 
 .progress-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(135deg, #0f3f6d, #d4a92d);
+  background: linear-gradient(90deg, #fbbf24, #db2777);
 }
 
-.progress-grid {
-  margin-top: 1.2rem;
-  flex-wrap: wrap;
-}
-
-.progress-grid div {
-  flex: 1 1 7rem;
-  padding: 0.95rem;
-  border-radius: 1rem;
-  background: rgba(15, 63, 109, 0.06);
-}
-
-.progress-grid span,
-.status-row span {
-  color: #61768e;
-  font-size: 0.85rem;
-}
-
-.progress-grid strong,
-.status-row strong,
-.reality-value {
-  display: block;
-  margin-top: 0.3rem;
-  color: #12304f;
-  font-size: 1.05rem;
-}
-
-.earn-primary,
-.ghost-action {
-  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease, color 140ms ease, border-color 140ms ease;
-}
-
-.earn-primary {
-  width: 100%;
-  margin-top: 1.25rem;
+.earn-wallet-card button,
+.task-card button,
+.section-action {
   border: 0;
-  border-radius: 1rem;
-  padding: 1rem 1.1rem;
-  color: #fefefe;
-  font-weight: 700;
-  background: linear-gradient(135deg, #0f3f6d, #2e7bd8);
-  box-shadow: 0 16px 30px -24px rgba(15, 63, 109, 0.8);
+  color: #fff;
+  background: #111827;
 }
 
-.earn-primary:disabled {
-  opacity: 0.58;
+.earn-wallet-card button:disabled,
+.task-card button:disabled {
+  color: #94a3b8;
+  background: #e5e7eb;
   cursor: not-allowed;
-  transform: none;
 }
 
-.reality-grid {
+.earn-snapshot {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 16px;
+  background: #fff;
+}
+
+.earn-snapshot div {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.earn-snapshot span,
+.reward-log span,
+.story-grid small,
+.task-card p,
+.app-lane p,
+.app-task-list small {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.earn-snapshot strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.earn-section {
+  margin-top: 16px;
+  padding: 20px;
+  background: #fff;
+}
+
+.section-head {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.section-head h2,
+.app-lane h2 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 38px);
+  font-weight: 950;
+}
+
+.task-grid {
+  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.reality-card h2,
-.section-title,
-.activity-title {
-  margin: 0;
-  color: #12304f;
+.task-card {
+  min-height: 260px;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
-.reality-card h2 {
-  font-size: 1.1rem;
+.task-topline {
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.reality-value {
-  margin-top: 0.85rem;
-  font-size: 1.55rem;
+.task-topline span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
-.section-title {
-  font-size: clamp(1.4rem, 2.2vw, 1.9rem);
-  line-height: 1.08;
-  letter-spacing: -0.04em;
+.task-topline strong {
+  color: #db2777;
 }
 
-.panel-card-dark {
-  background: linear-gradient(150deg, rgba(16, 45, 84, 0.97), rgba(95, 71, 4, 0.94));
-  color: rgba(245, 250, 255, 0.96);
+.task-card h3 {
+  min-height: 58px;
+  margin: 24px 0 8px;
+  font-size: 22px;
+  line-height: 1.15;
+  font-weight: 950;
 }
 
-.panel-card-dark .section-title,
-.panel-card-dark .status-row strong,
-.panel-card-dark .status-row span {
-  color: inherit;
+.task-card p {
+  min-height: 62px;
+  line-height: 1.55;
 }
 
-.rule-list {
-  margin: 0;
-  padding-left: 1.2rem;
+.task-card button {
+  width: 100%;
+  margin-top: 18px;
+}
+
+.app-lane {
   display: grid;
-  gap: 0.8rem;
-  line-height: 1.75;
+  grid-template-columns: minmax(0, 0.9fr) minmax(280px, 1.1fr);
+  gap: 16px;
+  color: #fff;
+  background: #111827;
 }
 
-.native-callout {
-  margin-top: 1.3rem;
-  padding: 1rem;
-  border-radius: 1rem;
-  background: rgba(15, 63, 109, 0.06);
+.app-lane .section-kicker,
+.app-lane p,
+.app-task-list small {
+  color: rgba(255, 255, 255, 0.68);
 }
 
-.native-callout strong {
-  color: #12304f;
-}
-
-.cta-row {
-  margin-top: 1.4rem;
-  flex-wrap: wrap;
-}
-
-.ghost-action {
-  border: 1px solid rgba(15, 63, 109, 0.12);
-  background: rgba(255, 255, 255, 0.78);
-  color: #0f3f6d;
-  border-radius: 999px;
-  padding: 0.7rem 1rem;
-  font-weight: 600;
-}
-
-.ghost-action:hover {
-  transform: translateY(-1px);
-}
-
-.status-stack {
+.app-task-list {
   display: grid;
-  gap: 0.95rem;
+  gap: 10px;
 }
 
-.activity-list {
+.app-task-list button {
   display: grid;
-  gap: 1rem;
-  margin-top: 1.4rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: left;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.activity-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1rem;
-  padding: 1.1rem;
-  background: rgba(247, 250, 254, 0.92);
+.app-task-list small {
+  grid-column: 1 / -1;
 }
 
-.activity-icon {
-  width: 3rem;
-  height: 3rem;
-  border-radius: 1rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(212, 169, 45, 0.15);
+.story-grid {
+  align-items: stretch;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
-.activity-title {
-  font-size: 1.02rem;
-  font-weight: 700;
+.story-grid button {
+  flex: 0 0 150px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  text-align: left;
+  background: transparent;
 }
 
-.activity-detail {
-  margin-top: 0.35rem;
-  line-height: 1.6;
+.story-grid img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e5e7eb;
 }
 
-.activity-amount {
-  color: #0f766e;
-  font-size: 1.04rem;
-  font-weight: 700;
+.story-grid span {
+  display: block;
+  min-height: 38px;
+  margin-top: 8px;
+  font-weight: 850;
+  line-height: 1.2;
 }
 
-.activity-meta {
-  margin-top: 0.85rem;
-  flex-wrap: wrap;
-  color: #70859b;
-  font-size: 0.9rem;
-}
-
-.panel-loading,
-.empty-shell {
-  min-height: 16rem;
+.empty-state {
+  min-height: 120px;
   display: grid;
   place-items: center;
+  border-radius: 8px;
+  color: #64748b;
+  background: #f8fafc;
   text-align: center;
 }
 
-.spinner {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 999px;
-  border: 3px solid rgba(46, 123, 216, 0.2);
-  border-top-color: #2e7bd8;
-  animation: spin 0.9s linear infinite;
+.reward-log-list {
+  display: grid;
+  gap: 10px;
 }
 
-.empty-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 4rem;
-  height: 4rem;
-  border-radius: 1.2rem;
-  background: linear-gradient(135deg, #0f3f6d, #d4a92d);
-  color: #fdfefe;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+.reward-log {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: #fff;
 }
 
-.empty-shell h3 {
-  margin-top: 1rem;
-  color: #143453;
-  font-size: 1.2rem;
-  font-weight: 700;
+.reward-log p {
+  margin: 0;
+  color: #16a34a;
+  font-weight: 900;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+@media (max-width: 860px) {
+  .earn-page {
+    padding: 12px 12px 96px;
   }
-}
 
-@media (max-width: 1024px) {
   .earn-hero,
-  .reality-grid,
-  .earn-grid {
+  .app-lane {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 640px) {
-  .earn-hero-copy,
-  .earn-hero-card,
-  .reality-card,
-  .panel-card,
-  .activity-shell {
-    padding: 1.2rem;
+  .task-grid {
+    grid-template-columns: 1fr;
   }
 
-  .hero-title {
-    max-width: none;
-  }
-
-  .hero-topline,
-  .section-head,
-  .activity-head {
-    flex-direction: column;
+  .earn-snapshot {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .earn-hero h1 {
+    font-size: clamp(38px, 14vw, 58px);
   }
 }
 </style>
